@@ -1,0 +1,118 @@
+name: CI
+on:
+  push:
+  pull_request:
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: soc
+          POSTGRES_USER: soc_owner
+          POSTGRES_PASSWORD: owner_password
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U soc_owner -d soc"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+      vault:
+        image: hashicorp/vault:1.21.4
+        env:
+          VAULT_DEV_ROOT_TOKEN_ID: vault-ci-token
+          VAULT_DEV_LISTEN_ADDRESS: 0.0.0.0:8200
+          VAULT_DISABLE_MLOCK: "true"
+        ports: ["8200:8200"]
+    env:
+      DATABASE_URL: postgresql+psycopg://soc_app:app_password@localhost:5432/soc
+      INTEGRATION_DATABASE_URL: postgresql+psycopg://soc_app:app_password@localhost:5432/soc
+      CELERY_BROKER_URL: redis://localhost:6379/0
+      INTEGRATION_REDIS_URL: redis://localhost:6379/0
+      INTEGRATION_VAULT_ADDR: http://localhost:8200
+      INTEGRATION_VAULT_TOKEN: vault-ci-token
+      JWT_PRIVATE_KEY_PATH: /tmp/soc-ci-jwt/private.pem
+      JWT_PUBLIC_KEY_PATH: /tmp/soc-ci-jwt/public.pem
+      JWT_ACTIVE_KID: ci-key-1
+      APP_ENV: test
+      RATE_LIMIT_ENABLED: "false"
+      ALLOW_PRIVATE_INTEGRATION_URLS: "true"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Generate ephemeral CI signing key
+        run: |
+          mkdir -p /tmp/soc-ci-jwt
+          openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -out /tmp/soc-ci-jwt/private.pem
+          openssl rsa -pubout -in /tmp/soc-ci-jwt/private.pem -out /tmp/soc-ci-jwt/public.pem
+      - run: pip install -r requirements-dev.txt
+      - name: Create restricted runtime database role
+        run: sh docker/postgres/init-app-user.sh
+        env:
+          PGHOST: localhost
+          PGPASSWORD: owner_password
+          POSTGRES_DB: soc
+          POSTGRES_USER: soc_owner
+          POSTGRES_APP_PASSWORD: app_password
+      - run: black --check app tests
+      - run: ruff check app tests
+      - run: mypy app
+      - name: Bandit high-confidence/high-severity scan
+        run: bandit -r app -lll -iii
+      - name: Semgrep security scan
+        run: >-
+          docker run --rm -v "${{ github.workspace }}:/src" -w /src
+          semgrep/semgrep@sha256:b94b53d02fd4a022f9eac4e2af1380f5c3c4c21400e79d3336bdff1d1db5e796
+          semgrep scan --config=p/python --config=p/security-audit --severity=ERROR --error app
+      - run: alembic upgrade head
+        env:
+          DATABASE_URL: postgresql+psycopg://soc_owner:owner_password@localhost:5432/soc
+      - run: alembic check
+        env:
+          DATABASE_URL: postgresql+psycopg://soc_owner:owner_password@localhost:5432/soc
+      - run: pytest --cov=app --cov-report=xml --cov-fail-under=80
+      - name: PostgreSQL backup and restore drill
+        run: |
+          container="${{ job.services.postgres.id }}"
+          docker exec -e PGPASSWORD=owner_password "$container" pg_dump -U soc_owner -d soc -Fc -f /tmp/soc.dump
+          docker exec -e PGPASSWORD=owner_password "$container" createdb -U soc_owner soc_restore_ci
+          docker exec -e PGPASSWORD=owner_password "$container" pg_restore -U soc_owner --exit-on-error --no-owner -d soc_restore_ci /tmp/soc.dump
+          docker exec -e PGPASSWORD=owner_password "$container" psql -U soc_owner -d soc_restore_ci -Atc "SELECT version_num FROM alembic_version"
+          docker exec -e PGPASSWORD=owner_password "$container" dropdb -U soc_owner --force soc_restore_ci
+      - run: pip-audit -r requirements.txt
+      - run: docker build -t autonomous-soc:${{ github.sha }} .
+      - name: Trivy image scan
+        run: >-
+          docker run --rm
+          -v /var/run/docker.sock:/var/run/docker.sock
+          aquasec/trivy@sha256:be1190afcb28352bfddc4ddeb71470835d16462af68d310f9f4bca710961a41e
+          image --scanners vuln --ignore-unfixed --severity HIGH,CRITICAL --exit-code 1
+          autonomous-soc:${{ github.sha }}
+      - name: Gitleaks repository scan
+        run: >-
+          docker run --rm -v "${{ github.workspace }}:/repo"
+          ghcr.io/gitleaks/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
+          dir /repo --config /repo/.gitleaks.toml --redact --exit-code 1
+      - name: Start API for DAST
+        run: |
+          nohup uvicorn app.main:app --host 0.0.0.0 --port 8000 >/tmp/soc-api.log 2>&1 &
+          for attempt in $(seq 1 30); do
+            curl --fail --silent http://127.0.0.1:8000/health/ready && exit 0
+            sleep 1
+          done
+          cat /tmp/soc-api.log
+          exit 1
+      - name: OWASP ZAP baseline
+        run: >-
+          docker run --rm --network host
+          ghcr.io/zaproxy/zaproxy@sha256:781a2bdaea47324e7bab583e2263f21d257b0aee61ed51521a5be45f5f5081ef
+          zap-baseline.py -t http://127.0.0.1:8000/openapi.json -I -m 1

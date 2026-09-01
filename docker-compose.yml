@@ -1,0 +1,176 @@
+services:
+  jwt-keys:
+    build: .
+    user: "0:0"
+    environment:
+      JWT_PRIVATE_KEY_PATH: /run/jwt/private.pem
+      JWT_PUBLIC_KEY_PATH: /run/jwt/public.pem
+    volumes:
+      - jwt_keys:/run/jwt
+    command: ["python", "-m", "app.scripts.generate_jwt_keys"]
+    networks: [backend]
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: soc
+      POSTGRES_USER: soc_owner
+      POSTGRES_PASSWORD: ${POSTGRES_OWNER_PASSWORD:-soc_owner_local_only}
+      POSTGRES_APP_PASSWORD: ${POSTGRES_APP_PASSWORD:-soc_app_local_only}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres/init-app-user.sh:/docker-entrypoint-initdb.d/10-app-user.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U soc_owner -d soc"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks: [backend]
+
+  api:
+    build: .
+    environment:
+      DATABASE_URL: postgresql+psycopg://soc_app:${POSTGRES_APP_PASSWORD:-soc_app_local_only}@db:5432/soc
+      APP_ENV: development
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+      JWT_PRIVATE_KEY_PATH: /run/jwt/private.pem
+      JWT_PUBLIC_KEY_PATH: /run/jwt/public.pem
+      JWT_ACTIVE_KID: ${JWT_ACTIVE_KID:-local-dev-1}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      jwt-keys:
+        condition: service_completed_successfully
+    volumes:
+      - jwt_keys:/run/jwt:ro
+    networks: [backend]
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+
+  gateway:
+    image: nginx:1.28-alpine
+    read_only: true
+    tmpfs:
+      - /var/cache/nginx
+      - /var/run
+    volumes:
+      - ./docker/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    ports:
+      - "8000:8080"
+    depends_on:
+      api:
+        condition: service_started
+    networks: [frontend, backend]
+
+  migrate:
+    build: .
+    environment:
+      DATABASE_URL: postgresql+psycopg://soc_owner:${POSTGRES_OWNER_PASSWORD:-soc_owner_local_only}@db:5432/soc
+    depends_on:
+      db:
+        condition: service_healthy
+    command: ["alembic", "upgrade", "head"]
+    networks: [backend]
+
+  worker:
+    build: .
+    environment:
+      DATABASE_URL: postgresql+psycopg://soc_app:${POSTGRES_APP_PASSWORD:-soc_app_local_only}@db:5432/soc
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+      JWT_PRIVATE_KEY_PATH: /run/jwt/private.pem
+      JWT_PUBLIC_KEY_PATH: /run/jwt/public.pem
+      JWT_ACTIVE_KID: ${JWT_ACTIVE_KID:-local-dev-1}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      jwt-keys:
+        condition: service_completed_successfully
+    volumes:
+      - jwt_keys:/run/jwt:ro
+    networks: [backend, integration_egress]
+    command: ["celery", "-A", "app.workers.celery_app:celery_app", "worker", "--loglevel=INFO"]
+
+  beat:
+    build: .
+    environment:
+      DATABASE_URL: postgresql+psycopg://soc_app:${POSTGRES_APP_PASSWORD:-soc_app_local_only}@db:5432/soc
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+      SYNC_INTERVAL_SECONDS: ${SYNC_INTERVAL_SECONDS:-300}
+      JWT_PRIVATE_KEY_PATH: /run/jwt/private.pem
+      JWT_PUBLIC_KEY_PATH: /run/jwt/public.pem
+      JWT_ACTIVE_KID: ${JWT_ACTIVE_KID:-local-dev-1}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      jwt-keys:
+        condition: service_completed_successfully
+    volumes:
+      - jwt_keys:/run/jwt:ro
+    networks: [backend]
+    command: ["celery", "-A", "app.workers.celery_app:celery_app", "beat", "--loglevel=INFO"]
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks: [backend]
+
+  backup:
+    image: postgres:16-alpine
+    environment:
+      PGHOST: db
+      PGDATABASE: soc
+      PGUSER: soc_owner
+      PGPASSWORD: ${POSTGRES_OWNER_PASSWORD:-soc_owner_local_only}
+      BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-86400}
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-7}
+    volumes:
+      - postgres_backups:/backups
+    depends_on:
+      db:
+        condition: service_healthy
+    command:
+      - sh
+      - -ec
+      - |
+        umask 077
+        while true; do
+          target="/backups/soc-$$(date -u +%Y%m%dT%H%M%SZ).dump"
+          pg_dump --format=custom --no-password --file="$$target"
+          pg_restore --list "$$target" >/dev/null
+          find /backups -type f -name 'soc-*.dump' -mtime "+$$BACKUP_RETENTION_DAYS" -delete
+          sleep "$$BACKUP_INTERVAL_SECONDS"
+        done
+    networks: [backend]
+
+volumes:
+  postgres_data:
+  redis_data:
+  jwt_keys:
+  postgres_backups:
+
+networks:
+  frontend:
+  backend:
+    internal: true
+  integration_egress:

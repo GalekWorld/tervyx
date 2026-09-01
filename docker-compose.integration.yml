@@ -1,0 +1,12 @@
+services:
+  db:
+    ports:
+      - "127.0.0.1:55432:5432"
+
+  redis:
+    ports:
+      - "127.0.0.1:56379:6379"
+
+networks:
+  backend:
+    internal: false

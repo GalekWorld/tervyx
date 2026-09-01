@@ -1,0 +1,14 @@
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Generated local dependencies and external E2E fixtures"
+paths = [
+  '''(^|/)\.venv/''',
+  '''(^|/)\.semgrep-venv/''',
+  '''(^|/)\.tools/''',
+  '''(^|/)\.wazuh-e2e/''',
+  '''(^|/)\.mypy_cache/''',
+  '''(^|/)\.pytest_cache/''',
+  '''(^|/)\.ruff_cache/''',
+]

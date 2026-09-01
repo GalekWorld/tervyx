@@ -1,0 +1,19 @@
+#!/bin/sh
+set -eu
+
+psql --set=ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" \
+  --set=app_password="$POSTGRES_APP_PASSWORD" --set=database_name="$POSTGRES_DB" \
+  --set=owner_role="$POSTGRES_USER" <<-'EOSQL'
+SELECT format(
+  'CREATE ROLE soc_app LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT PASSWORD %L',
+  :'app_password'
+) WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'soc_app') \gexec
+GRANT CONNECT ON DATABASE :"database_name" TO soc_app;
+GRANT USAGE ON SCHEMA public TO soc_app;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO soc_app;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO soc_app;
+ALTER DEFAULT PRIVILEGES FOR ROLE :"owner_role" IN SCHEMA public
+  GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO soc_app;
+ALTER DEFAULT PRIVILEGES FOR ROLE :"owner_role" IN SCHEMA public
+  GRANT USAGE, SELECT ON SEQUENCES TO soc_app;
+EOSQL

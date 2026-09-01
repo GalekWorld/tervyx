@@ -1,0 +1,12 @@
+services:
+  api:
+    environment:
+      INTEGRATION_ALLOWED_HOSTS: host.docker.internal
+      INTEGRATION_ALLOWED_PRIVATE_CIDRS: ${WAZUH_E2E_ALLOWED_PRIVATE_CIDRS:?Set WAZUH_E2E_ALLOWED_PRIVATE_CIDRS to the current host.docker.internal addresses}
+      WAZUH_E2E_CREDENTIALS: ${WAZUH_E2E_CREDENTIALS:?Set WAZUH_E2E_CREDENTIALS for the local E2E}
+
+  worker:
+    environment:
+      INTEGRATION_ALLOWED_HOSTS: host.docker.internal
+      INTEGRATION_ALLOWED_PRIVATE_CIDRS: ${WAZUH_E2E_ALLOWED_PRIVATE_CIDRS:?Set WAZUH_E2E_ALLOWED_PRIVATE_CIDRS to the current host.docker.internal addresses}
+      WAZUH_E2E_CREDENTIALS: ${WAZUH_E2E_CREDENTIALS:?Set WAZUH_E2E_CREDENTIALS for the local E2E}

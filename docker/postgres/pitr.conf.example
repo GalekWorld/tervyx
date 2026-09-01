@@ -1,0 +1,8 @@
+# Mount WAL_ARCHIVE_PATH on independent durable storage before enabling.
+wal_level = replica
+archive_mode = on
+archive_timeout = 60s
+archive_command = 'test ! -f /wal-archive/%f && cp %p /wal-archive/%f'
+
+# Pair archived WAL with periodic pg_basebackup snapshots, for example:
+# pg_basebackup -h db -U backup_replication -D /basebackups/<timestamp> -Ft -z -Xs -P
