@@ -19,11 +19,12 @@ sealed class HeartbeatWorker(ILogger<HeartbeatWorker> log) : BackgroundService
         var thumbprint = Environment.GetEnvironmentVariable("TERYVX_AGENT_CERT_THUMBPRINT")
             ?? throw new InvalidOperationException("TERYVX_AGENT_CERT_THUMBPRINT is required");
         using var handler = new HttpClientHandler();
-        handler.ClientCertificates.Add(CertificateStore.LoadClientCertificate(thumbprint));
+        var clientCertificate = CertificateStore.LoadClientCertificate(thumbprint);
+        handler.ClientCertificates.Add(clientCertificate);
         using var client = new HttpClient(handler) { BaseAddress = serviceUri, Timeout = TimeSpan.FromSeconds(15) };
         client.DefaultRequestHeaders.Add("X-Agent-Token", token);
         client.DefaultRequestHeaders.Add("X-Agent-Organization-Id", organization);
-        client.DefaultRequestHeaders.Add("X-Agent-Certificate-Serial", handler.ClientCertificates[0].SerialNumber);
+        client.DefaultRequestHeaders.Add("X-Agent-Certificate-Serial", clientCertificate.SerialNumber);
         while (!stoppingToken.IsCancellationRequested)
         {
             try
