@@ -2,6 +2,7 @@ from celery import Celery
 
 from app.core.config import get_settings
 from app.core.logging import configure_logging
+from app.core.observability import instrument_celery
 
 settings = get_settings()
 configure_logging()
@@ -25,6 +26,15 @@ celery_app.conf.update(
         "periodic-wazuh-sync": {
             "task": "schedule_wazuh_syncs",
             "schedule": settings.sync_interval_seconds,
-        }
+        },
+        "periodic-retention-archive": {
+            "task": "archive_retention_data",
+            "schedule": 3600,
+        },
+        "periodic-self-monitoring": {
+            "task": "evaluate_self_monitoring",
+            "schedule": 60,
+        },
     },
 )
+instrument_celery(celery_app)

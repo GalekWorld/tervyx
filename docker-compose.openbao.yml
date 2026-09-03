@@ -1,0 +1,22 @@
+services:
+  openbao:
+    image: ghcr.io/openbao/openbao:2.6.1
+    cap_add: [IPC_LOCK]
+    environment:
+      BAO_ADDR: http://127.0.0.1:8200
+    command:
+      - server
+      - -dev
+      - -dev-root-token-id=${OPENBAO_DEV_ROOT_TOKEN_ID:-openbao-test-token}
+      - -dev-listen-address=0.0.0.0:8200
+    ports:
+      - "127.0.0.1:58201:8200"
+    healthcheck:
+      test: ["CMD", "bao", "status"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    networks: [openbao_test]
+
+networks:
+  openbao_test:

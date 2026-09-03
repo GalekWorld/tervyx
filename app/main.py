@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
@@ -12,7 +14,10 @@ from app.core.config import get_settings
 from app.core.database import SessionLocal, engine
 from app.core.logging import configure_logging
 from app.core.middleware import security_middleware
-from app.core.observability import configure_telemetry
+from app.core.observability import HEALTH_CHECKS, configure_telemetry
+from app.services import audit_ledger  # noqa: F401 - registers the sealing listener
+
+logger = logging.getLogger(__name__)
 
 
 def create_app() -> FastAPI:
@@ -22,7 +27,7 @@ def create_app() -> FastAPI:
     application = FastAPI(
         title=settings.app_name,
         debug=settings.debug,
-        version="0.1.0",
+        version="0.2.7",
         description="Hardened multi-tenant Autonomous SOC API",
         docs_url=None if production else "/docs",
         redoc_url=None if production else "/redoc",
@@ -34,7 +39,7 @@ def create_app() -> FastAPI:
             CORSMiddleware,
             allow_origins=settings.cors_origins_list,
             allow_credentials=False,
-            allow_methods=["GET", "POST"],
+            allow_methods=["GET", "POST", "PUT"],
             allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
         )
     application.middleware("http")(security_middleware)
@@ -47,6 +52,7 @@ def create_app() -> FastAPI:
     @application.get("/health", tags=["system"])
     @application.get("/health/live", tags=["system"])
     def health() -> dict[str, str]:
+        HEALTH_CHECKS.labels("live", "ok").inc()
         return {"status": "ok"}
 
     @application.get("/health/ready", tags=["system"])
@@ -55,8 +61,11 @@ def create_app() -> FastAPI:
             with SessionLocal() as session:
                 session.execute(text("SELECT 1"))
             Redis.from_url(settings.celery_broker_url).ping()
+            HEALTH_CHECKS.labels("ready", "ok").inc()
             return {"status": "ready"}
-        except Exception:
+        except Exception as exc:
+            HEALTH_CHECKS.labels("ready", "degraded").inc()
+            logger.warning("readiness_degraded", extra={"component": type(exc).__name__})
             return JSONResponse(status_code=503, content={"status": "not_ready"})
 
     @application.get("/metrics", include_in_schema=False)
@@ -65,6 +74,14 @@ def create_app() -> FastAPI:
 
     @application.exception_handler(Exception)
     async def unhandled_error(request: Request, exc: Exception):
+        logger.exception(
+            "unhandled_request_error",
+            extra={
+                "request_id": getattr(request.state, "request_id", None),
+                "method": request.method,
+                "path": request.url.path,
+            },
+        )
         return JSONResponse(
             status_code=500,
             content={

@@ -4,15 +4,16 @@ Revision ID: b76d20e732f1
 Revises: 8c11f67a43b2
 """
 
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 import sqlalchemy as sa
+
 from alembic import op
 
 revision: str = "b76d20e732f1"
-down_revision: Union[str, None] = "8c11f67a43b2"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "8c11f67a43b2"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
@@ -28,19 +29,13 @@ def upgrade() -> None:
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.ForeignKeyConstraint(["organization_id"], ["organizations.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["user_id"], ["users.id"], ondelete="CASCADE"),
-        sa.ForeignKeyConstraint(
-            ["replaced_by_id"], ["refresh_tokens.id"], ondelete="SET NULL"
-        ),
+        sa.ForeignKeyConstraint(["replaced_by_id"], ["refresh_tokens.id"], ondelete="SET NULL"),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("token_hash"),
     )
-    op.create_index(
-        "ix_refresh_tokens_organization_id", "refresh_tokens", ["organization_id"]
-    )
+    op.create_index("ix_refresh_tokens_organization_id", "refresh_tokens", ["organization_id"])
     op.create_index("ix_refresh_tokens_user_id", "refresh_tokens", ["user_id"])
-    op.create_index(
-        "ix_refresh_tokens_org_user", "refresh_tokens", ["organization_id", "user_id"]
-    )
+    op.create_index("ix_refresh_tokens_org_user", "refresh_tokens", ["organization_id", "user_id"])
     if op.get_bind().dialect.name == "postgresql":
         tenant = "NULLIF(current_setting('app.current_organization_id', true), '')::uuid"
         op.execute("ALTER TABLE refresh_tokens ENABLE ROW LEVEL SECURITY")

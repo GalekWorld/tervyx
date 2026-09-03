@@ -8,8 +8,13 @@
 - `POSTGRES_APP_PASSWORD`: API, worker y beat.
 - `DATABASE_URL`, Redis broker/backend y `ALLOWED_HOSTS`.
 - `CORS_ORIGINS`: lista explícita; vacío si no hay cliente web.
-- `OTEL_EXPORTER_OTLP_ENDPOINT`: collector OTLP/HTTP, si existe.
-- `CREDENTIAL_STORE_BACKEND`: `environment`, `vault` o `aws_secrets_manager`.
+- `OTEL_EXPORTER_OTLP_ENDPOINT`: collector OTLP/HTTP; obligatorio HTTPS en producción.
+- `SENTRY_DSN`, `SENTRY_ENVIRONMENT`, `SENTRY_RELEASE` y
+  `SENTRY_TRACES_SAMPLE_RATE`: Sentry para errores/releases; el DSN HTTPS es
+  obligatorio en producción y siempre se inyecta desde secretos externos.
+- `CREDENTIAL_STORE_BACKEND`: `environment` solo en desarrollo; `vault`, `openbao` o
+  `aws_secrets_manager` en producción.
+- `OIDC_TRANSACTION_KEY`: clave Fernet independiente para verificadores PKCE temporales.
 
 ## Despliegue seguro
 
@@ -20,6 +25,10 @@
 5. Configurar probes en `/health/live` y `/health/ready`; no usar `/health` como readiness.
 6. Restringir `/metrics` a la red de observabilidad y enviar OTLP al collector.
 7. Ejecutar el contenedor como usuario no root y limitar egress a Wazuh y servicios necesarios.
+8. Aplicar una política de red que permita egress únicamente desde workers hacia los FQDN/IP
+   allowlisted de integraciones, Vault/OpenBao/AWS y el collector OTLP. API, Beat, Redis y
+   PostgreSQL no deben tener salida a Internet. La política debe seguir bloqueando loopback,
+   metadata y rangos privados no autorizados aunque DNS cambie.
 
 Docker Compose es un entorno de desarrollo serio, no alta disponibilidad. Redis usa AOF, pero
 producción requiere Sentinel/cluster o servicio gestionado. Beat y workers deben tener una cola
@@ -37,9 +46,13 @@ WAL externo, cifrado, versionado y probado.
 ## TLS y secretos
 
 TLS termina en el ingress/gateway gestionado en producción; PostgreSQL, Redis, Vault y Wazuh
-deben usar TLS/mTLS según soporte. `docker-compose.vault.yml` es exclusivamente un contract test
-HTTP local. La rotación JWT consiste en publicar primero la nueva pública, cambiar `kid` y clave
+deben usar TLS/mTLS según soporte. Para tráfico interno se exige mTLS del service mesh o proxies
+por servicio y `sslmode=verify-full` para PostgreSQL; la red Docker interna no sustituye TLS.
+`docker-compose.vault.yml` es exclusivamente un contract test HTTP local. La rotación JWT consiste
+en publicar primero la nueva pública, cambiar `kid` y clave
 privada del firmante, esperar la expiración máxima y retirar la pública antigua.
+La configuración de Entra/OIDC, namespaces de secretos y revocación de emergencia se detalla en
+`docs/identity-secrets-access.md`.
 
 ## Verificación previa al rollout
 
@@ -50,7 +63,8 @@ mypy app
 alembic upgrade head
 alembic check
 pytest --cov=app --cov-fail-under=80
-pip-audit -r requirements.txt
+pip install --require-hashes -r requirements-dev.lock
+pip-audit -r requirements.lock
 docker build -t autonomous-soc:candidate .
 ```
 

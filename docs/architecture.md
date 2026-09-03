@@ -22,13 +22,18 @@ sincronización de alertas puede continuar por `search_after`; la de agentes por
 
 - `/health/live` prueba únicamente que el proceso responde.
 - `/health/ready` requiere PostgreSQL y Redis.
-- `/metrics` expone contadores y latencias HTTP Prometheus.
-- OpenTelemetry instrumenta FastAPI y SQLAlchemy y exporta por OTLP/HTTP si se configura.
+- `/metrics` expone contadores y latencias HTTP Prometheus, incluyendo probes de
+  salud y ejecuciones Celery.
+- OpenTelemetry instrumenta FastAPI y SQLAlchemy y exporta traces/metrics por
+  OTLP/HTTP; Sentry captura excepciones, releases y fallos de workers cuando se
+  configura su DSN.
 - Los logs JSON llevan campos del job (`integration_id`, `organization_id`, `job_id`, conteos y
   duración) y los errores se sanitizan.
 
-La API no realiza HTTP a Wazuh. Los workers usan límites de tiempo Celery y el cliente aplica
-timeout, reintentos con backoff exponencial/jitter y tratamiento explícito de 401/403, 429 y 5xx.
+La API no realiza HTTP a Wazuh. Los workers usan límites de tiempo Celery y los clientes aplican
+la política común de timeout, reintentos con backoff exponencial/jitter, circuit breaker,
+bulkhead y tratamiento explícito de errores retryable/no-retryable (401/403, 429 y 5xx).
+Los detalles y límites operativos están en `docs/connector-resilience.md`.
 
 ## Segmentación
 

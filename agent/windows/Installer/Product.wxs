@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="Tervyx Endpoint Agent" Manufacturer="Tervyx" Version="$(var.ProductVersion)" UpgradeCode="8A3B4F35-7C3C-4A11-9F78-1D67B7C4C2E1" Scope="perMachine">
+    <MajorUpgrade DowngradeErrorMessage="A newer Tervyx Agent is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+    <Feature Id="Main" Title="Tervyx Endpoint Agent" Level="1">
+      <ComponentGroupRef Id="AgentFiles" />
+    </Feature>
+  </Package>
+  <Fragment>
+    <StandardDirectory Id="ProgramFilesFolder">
+      <Directory Id="INSTALLFOLDER" Name="Tervyx Agent" />
+    </StandardDirectory>
+    <ComponentGroup Id="AgentFiles" Directory="INSTALLFOLDER">
+      <Component Guid="*">
+        <File Source="$(var.PublishDir)\\Tervyx.Agent.exe" KeyPath="yes" />
+        <ServiceInstall Name="TervyxAgent" DisplayName="Tervyx Endpoint Agent" Start="auto" Type="ownProcess" Account="LocalSystem" ErrorControl="normal" />
+        <ServiceControl Name="TervyxAgent" Start="install" Stop="both" Remove="uninstall" Wait="yes" />
+      </Component>
+      <Files Include="$(var.PublishDir)\\**">
+        <Exclude Files="Tervyx.Agent.exe" />
+      </Files>
+    </ComponentGroup>
+  </Fragment>
+</Wix>

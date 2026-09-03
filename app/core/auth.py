@@ -17,6 +17,44 @@ from pwdlib import PasswordHash
 from app.core.config import get_settings
 
 ROLES = {"viewer": 1, "analyst": 2, "admin": 3}
+ALL_CAPABILITIES = frozenset(
+    {
+        "security.read",
+        "events.ingest",
+        "integrations.read",
+        "integrations.manage",
+        "integrations.execute",
+        "dead_letters.read",
+        "dead_letters.reprocess",
+        "dead_letters.discard",
+        "identity.manage",
+        "sessions.revoke",
+        "secrets.rotate",
+        "audit.read",
+    }
+)
+PLATFORM_ADMIN_CAPABILITIES = frozenset(
+    {
+        "platform.identity.manage",
+        "platform.secrets.rotate",
+        "platform.audit.export",
+        "platform.sessions.revoke",
+    }
+)
+ROLE_CAPABILITIES = {
+    "viewer": frozenset({"security.read", "integrations.read"}),
+    "analyst": frozenset(
+        {
+            "security.read",
+            "events.ingest",
+            "integrations.read",
+            "integrations.execute",
+            "dead_letters.read",
+            "dead_letters.reprocess",
+        }
+    ),
+    "admin": ALL_CAPABILITIES,
+}
 password_hash = PasswordHash.recommended()
 
 
@@ -25,6 +63,11 @@ class Principal:
     user_id: uuid.UUID
     organization_id: uuid.UUID
     role: str
+    capabilities: frozenset[str] = frozenset()
+    session_id: uuid.UUID | None = None
+    mfa_verified: bool = False
+    privileged_session_id: uuid.UUID | None = None
+    privileged_capabilities: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -84,22 +127,43 @@ def _encode(payload: dict[str, Any]) -> str:
     )
 
 
-def create_access_token(user_id: uuid.UUID, organization_id: uuid.UUID, role: str) -> str:
+def create_access_token(
+    user_id: uuid.UUID,
+    organization_id: uuid.UUID,
+    role: str,
+    *,
+    session_id: uuid.UUID | None = None,
+    mfa_verified: bool = False,
+    privileged_session_id: uuid.UUID | None = None,
+    privileged_capabilities: frozenset[str] = frozenset(),
+    expires_at: datetime | None = None,
+) -> str:
     settings = get_settings()
     now = datetime.now(UTC)
-    return _encode(
-        {
-            "sub": str(user_id),
-            "org": str(organization_id),
-            "role": role,
-            "iss": settings.jwt_issuer,
-            "aud": settings.jwt_audience,
-            "iat": now,
-            "exp": now + timedelta(minutes=settings.access_token_ttl_minutes),
-            "jti": str(uuid.uuid4()),
-            "type": "access",
-        }
-    )
+    if expires_at is not None and expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=UTC)
+    payload: dict[str, Any] = {
+        "sub": str(user_id),
+        "org": str(organization_id),
+        "role": role,
+        "iss": settings.jwt_issuer,
+        "aud": settings.jwt_audience,
+        "iat": now,
+        "exp": (
+            min(now + timedelta(minutes=settings.access_token_ttl_minutes), expires_at)
+            if expires_at
+            else now + timedelta(minutes=settings.access_token_ttl_minutes)
+        ),
+        "jti": str(uuid.uuid4()),
+        "type": "access",
+        "mfa": mfa_verified,
+    }
+    if session_id is not None:
+        payload["sid"] = str(session_id)
+    if privileged_session_id is not None:
+        payload["psid"] = str(privileged_session_id)
+        payload["pcap"] = sorted(privileged_capabilities)
+    return _encode(payload)
 
 
 def create_worker_token(organization_id: uuid.UUID, integration_id: uuid.UUID) -> str:
@@ -170,3 +234,15 @@ def verify_password(password: str, encoded: str) -> bool:
 
 def hash_password(password: str) -> str:
     return password_hash.hash(password)
+
+
+def effective_capabilities(role: str, overrides: list[tuple[str, str]]) -> frozenset[str]:
+    capabilities = set(ROLE_CAPABILITIES.get(role, frozenset()))
+    for capability, effect in overrides:
+        if capability not in ALL_CAPABILITIES:
+            continue
+        if effect == "allow":
+            capabilities.add(capability)
+        elif effect == "deny":
+            capabilities.discard(capability)
+    return frozenset(capabilities)

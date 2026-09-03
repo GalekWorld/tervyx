@@ -17,3 +17,9 @@ htmlcov/
 autonomous-soc-*.tar
 benchmark-results/
 backups/
+infra/tofu/.terraform/
+infra/tofu/*.tfstate
+infra/tofu/*.tfstate.*
+infra/tofu/backend.hcl
+infra/tofu/environments/*.tfvars
+!infra/tofu/environments/*.tfvars.example

@@ -1,0 +1,46 @@
+name: IaC Drift Detection
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Environment to inspect"
+        required: true
+        type: choice
+        options: [staging, production]
+
+permissions:
+  contents: read
+
+jobs:
+  drift:
+    # Operational prerequisite: a read-only cloud identity, isolated network
+    # access and OpenTofu installed. This runner has no apply permission.
+    runs-on: [self-hosted, tervyx-infra-readonly]
+    environment: ${{ inputs.environment || 'production' }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - run: python3 scripts/validate_iac.py
+      - name: Inspect drift without apply capability
+        shell: bash
+        env:
+          TOFU_BACKEND_HCL: ${{ secrets.TOFU_BACKEND_HCL }}
+          TOFU_TFVARS: ${{ secrets.TOFU_TFVARS }}
+          TARGET_ENV: ${{ inputs.environment || 'production' }}
+        run: |
+          test -n "$TOFU_BACKEND_HCL" && test -n "$TOFU_TFVARS"
+          umask 077
+          printf '%s' "$TOFU_BACKEND_HCL" > /tmp/tervyx-backend.hcl
+          printf '%s' "$TOFU_TFVARS" > /tmp/tervyx.tfvars
+          tofu -chdir=infra/tofu init -input=false -backend-config=/tmp/tervyx-backend.hcl
+          set +e
+          tofu -chdir=infra/tofu plan -input=false -lock-timeout=5m -detailed-exitcode -var-file=/tmp/tervyx.tfvars >/tmp/tervyx-drift.log
+          status=$?
+          rm -f /tmp/tervyx-backend.hcl /tmp/tervyx.tfvars
+          if [ "$status" -eq 2 ]; then
+            echo "Drift detected for $TARGET_ENV; inspect the protected runner log and open an incident."
+            exit 1
+          fi
+          exit "$status"

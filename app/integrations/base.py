@@ -25,6 +25,7 @@ class NormalizedEvent:
     severity: int
     occurred_at: datetime
     raw_payload: dict[str, Any]
+    normalized_data: dict[str, Any]
 
 
 @dataclass(frozen=True, slots=True)

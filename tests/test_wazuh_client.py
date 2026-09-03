@@ -4,9 +4,19 @@ import pytest
 from app.integrations.wazuh.client import (
     WazuhAuthenticationError,
     WazuhClient,
+    WazuhClientError,
     WazuhRateLimitError,
     WazuhResponseError,
 )
+
+
+def test_production_wazuh_requires_verified_tls(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "app.integrations.wazuh.client.get_settings",
+        lambda: type("S", (), {"app_env": "production"})(),
+    )
+    with pytest.raises(WazuhClientError, match="TLS verification"):
+        WazuhClient("http://wazuh.internal", {"verify_ssl": True})
 
 
 def make_client(handler, *, retries=2, sleeps=None):
@@ -63,7 +73,8 @@ def test_rate_limit_retries_then_fails() -> None:
             retries=2,
             sleeps=sleeps,
         ).authenticate()
-    assert sleeps == [0.25, 0.25]
+    assert len(sleeps) == 2
+    assert all(0.1875 <= delay <= 0.3125 for delay in sleeps)
 
 
 def test_server_error_retries_with_exponential_backoff() -> None:
@@ -76,7 +87,9 @@ def test_server_error_retries_with_exponential_backoff() -> None:
         return httpx.Response(200, json={"data": {"token": "ok"}})
 
     assert make_client(handler, sleeps=sleeps).authenticate() == "ok"
-    assert sleeps == [1, 2]
+    assert len(sleeps) == 2
+    assert 0.75 <= sleeps[0] <= 1.25
+    assert 1.5 <= sleeps[1] <= 2.5
 
 
 def test_malformed_indexer_response() -> None:

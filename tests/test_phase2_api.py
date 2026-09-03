@@ -43,9 +43,7 @@ def test_integration_crud_is_tenant_scoped_and_does_not_leak_reference(client: T
 def test_sync_and_test_enqueue_jobs(client: TestClient, monkeypatch) -> None:
     entity_id = create_integration(client).json()["id"]
     fake = Mock(id="job-123")
-    monkeypatch.setattr("app.api.router.test_wazuh_connection.delay", Mock(return_value=fake))
-    monkeypatch.setattr("app.api.router.sync_wazuh_agents.delay", Mock(return_value=fake))
-    monkeypatch.setattr("app.api.router.sync_wazuh_alerts.delay", Mock(return_value=fake))
+    monkeypatch.setattr("app.api.router.enqueue_task", Mock(return_value=fake))
     assert client.post(f"/api/v1/integrations/{entity_id}/test", headers=h()).status_code == 202
     assert client.post(f"/api/v1/integrations/{entity_id}/sync", headers=h()).status_code == 202
 

@@ -1,6 +1,7 @@
 import uuid
 from collections.abc import Generator
 
+from fastapi import Request
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
@@ -20,8 +21,9 @@ engine = create_engine(
 SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
 
 
-def get_db() -> Generator[Session, None, None]:
+def get_db(request: Request) -> Generator[Session, None, None]:
     session = SessionLocal()
+    request.state.db = session
     try:
         yield session
     finally:

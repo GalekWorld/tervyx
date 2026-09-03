@@ -1,0 +1,4 @@
+# Enforce review through repository branch protection; the platform team must
+# own every infrastructure and workflow change.
+/infra/ @tervyx-platform
+/.github/workflows/ @tervyx-platform

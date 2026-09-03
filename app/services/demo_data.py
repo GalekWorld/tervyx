@@ -17,6 +17,7 @@ from app.models import (
     SecurityEvent,
     User,
 )
+from app.services import audit_ledger  # noqa: F401 - registers the sealing listener
 
 DEMO_ORGANIZATION_ID = uuid.UUID("10000000-0000-0000-0000-000000000001")
 

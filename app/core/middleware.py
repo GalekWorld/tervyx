@@ -5,11 +5,13 @@ from typing import cast
 
 from fastapi import Request
 from fastapi.responses import JSONResponse
+from opentelemetry import trace
 from redis import Redis
 from redis.exceptions import RedisError
 
 from app.core.config import get_settings
 from app.core.observability import HTTP_DURATION, HTTP_REQUESTS
+from app.models import AuditLog
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +20,8 @@ async def security_middleware(request: Request, call_next):
     settings = get_settings()
     request_id = request.headers.get("X-Request-ID", str(uuid.uuid4()))[:128]
     request.state.request_id = request_id
+    span = trace.get_current_span()
+    span.set_attribute("tervyx.request_id", request_id)
     content_length = request.headers.get("content-length")
     if content_length:
         try:
@@ -60,11 +64,61 @@ async def security_middleware(request: Request, call_next):
             )
     started = time.monotonic()
     response = await call_next(request)
+    tenant_id = getattr(request.state, "tenant_id", None)
+    if tenant_id:
+        span.set_attribute("tervyx.tenant_id", tenant_id)
+    try:
+        import sentry_sdk
+
+        sentry_sdk.set_tag("request_id", request_id)
+        if tenant_id:
+            sentry_sdk.set_tag("tenant_id", tenant_id)
+    except Exception as exc:
+        # Telemetry must never change request behavior.
+        logger.debug("observability_context_failed", extra={"error_type": type(exc).__name__})
     route = request.scope.get("route")
     path = getattr(route, "path", request.url.path)
     duration_seconds = time.monotonic() - started
     HTTP_REQUESTS.labels(request.method, path, str(response.status_code)).inc()
     HTTP_DURATION.labels(request.method, path).observe(duration_seconds)
+    if response.status_code in {403, 404}:
+        logger.warning(
+            "security_http_denied",
+            extra={
+                "request_id": request_id,
+                "tenant_id": tenant_id,
+                "actor_id": getattr(request.state, "actor_id", None),
+                "method": request.method,
+                "path": path,
+                "status_code": response.status_code,
+                "client_ip": request.client.host if request.client else None,
+            },
+        )
+        db = getattr(request.state, "db", None)
+        if db is not None and tenant_id:
+            try:
+                db.add(
+                    AuditLog(
+                        organization_id=uuid.UUID(tenant_id),
+                        actor_type="user",
+                        actor_id=getattr(request.state, "actor_id", None),
+                        action="security.http_denied",
+                        resource_type="http_route",
+                        resource_id=path,
+                        details={
+                            "request_id": request_id,
+                            "status_code": response.status_code,
+                            "method": request.method,
+                            "client_ip": request.client.host if request.client else None,
+                        },
+                    )
+                )
+                db.commit()
+            except Exception:
+                db.rollback()
+                logger.exception(
+                    "security_http_denied_audit_failed", extra={"request_id": request_id}
+                )
     logger.info(
         "http_request_completed",
         extra={

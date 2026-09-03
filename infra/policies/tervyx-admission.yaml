@@ -1,0 +1,23 @@
+# Template only. Replace placeholders in a controlled cluster repository and
+# validate with the selected admission engine before enabling Enforce.
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: tervyx-signed-images
+spec:
+  validationFailureAction: Enforce
+  background: false
+  rules:
+    - name: verify-tervyx-release-signature
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+      verifyImages:
+        - imageReferences: ["ghcr.io/REPLACE_WITH_ORG/tervyx@*", "ghcr.io/REPLACE_WITH_ORG/tervyx:*" ]
+          mutateDigest: true
+          attestors:
+            - entries:
+                - keyless:
+                    issuer: "https://token.actions.githubusercontent.com"
+                    subjectRegExp: "https://github.com/REPLACE_WITH_ORG/REPLACE_WITH_REPO/.github/workflows/release.yml@refs/tags/.*"

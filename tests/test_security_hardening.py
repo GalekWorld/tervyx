@@ -1,11 +1,13 @@
 import socket
+import uuid
 
 import jwt
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from app.core.auth import create_access_token, hash_password
-from app.core.config import get_settings
+from app.core.auth import create_access_token, create_worker_token, hash_password
+from app.core.config import Settings, get_settings
 from app.core.network import UnsafeURLError, validate_outbound_url
 from app.models import User
 from tests.conftest import TEST_ORG_ID, auth_headers
@@ -137,6 +139,31 @@ def test_ssrf_blocks_private_dns(monkeypatch) -> None:
         settings.allow_private_integration_urls = old
 
 
+def test_ssrf_blocks_mixed_dns_answers_used_for_rebinding(monkeypatch) -> None:
+    settings = get_settings()
+    old = settings.allow_private_integration_urls
+    settings.allow_private_integration_urls = False
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda *args: [
+            (socket.AF_INET, 0, 0, "", ("93.184.216.34", 443)),
+            (socket.AF_INET, 0, 0, "", ("127.0.0.1", 443)),
+        ],
+    )
+    try:
+        with pytest.raises(UnsafeURLError):
+            validate_outbound_url("https://rebind.example/api")
+    finally:
+        settings.allow_private_integration_urls = old
+
+
+def test_worker_jwt_cannot_be_replayed_against_api(client: TestClient) -> None:
+    token = create_worker_token(TEST_ORG_ID, uuid.uuid4())
+    response = client.get("/api/v1/endpoints", headers={"Authorization": f"Bearer {token}"})
+    assert response.status_code == 401
+
+
 def test_payload_and_pagination_limits(client: TestClient) -> None:
     too_large = {"source": "wazuh", "payload": {"blob": "x" * 1_048_576}}
     assert client.post("/api/v1/events", json=too_large).status_code == 413
@@ -168,3 +195,8 @@ def test_rate_limit_returns_429_and_retry_after(client: TestClient, monkeypatch)
     finally:
         settings.rate_limit_enabled = old_enabled
         settings.rate_limit_requests = old_requests
+
+
+def test_production_settings_fail_closed_on_local_defaults() -> None:
+    with pytest.raises(ValueError, match="production"):
+        Settings(app_env="production")

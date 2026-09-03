@@ -1,3 +1,4 @@
+import base64
 import os
 import tempfile
 import uuid
@@ -7,6 +8,7 @@ os.environ["DATABASE_URL"] = "sqlite://"
 os.environ["APP_ENV"] = "test"
 os.environ["RATE_LIMIT_ENABLED"] = "false"
 os.environ["ALLOW_PRIVATE_INTEGRATION_URLS"] = "true"
+os.environ["OIDC_TRANSACTION_KEY"] = base64.urlsafe_b64encode(os.urandom(32)).decode()
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa

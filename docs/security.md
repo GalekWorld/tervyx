@@ -8,7 +8,10 @@ un cambio de rol invalida de facto tokens antiguos. La jerarquía es `viewer < a
 Los jobs Celery reciben tokens de audiencia separada, ligados a una integración concreta. JWKS
 se publica en `/.well-known/jwks.json`; `JWT_VERIFICATION_KEYS_JSON` conserva claves públicas
 anteriores durante una rotación. Los refresh tokens son opacos, se almacenan hasheados, rotan en
-cada uso y admiten revocación. OIDC externo continúa fuera de alcance.
+cada uso y están ligados a sesiones revocables. OIDC usa Authorization Code + PKCE, nonce,
+transacciones de un solo uso y JWKS. En producción los administradores solo pueden entrar por SSO
+con MFA verificada. Los roles se mantienen, pero cada operación exige una capability. El diseño
+completo está en `docs/identity-secrets-access.md`.
 
 ## Aislamiento multi-tenant
 
@@ -31,8 +34,9 @@ ni dispone de `BYPASSRLS`.
 
 ## Secretos
 
-`CredentialStore` expone solo `get(reference)`. El backend de entorno lee JSON por referencia
-para desarrollo; Vault KV v2 y AWS Secrets Manager se cargan de forma opcional. No se devuelve
+`CredentialStore` expone `get` y `rotate`, siempre con `organization_id`. El backend de entorno
+lee JSON por referencia solo para desarrollo; Vault KV v2, OpenBao KV v2 y AWS Secrets Manager
+usan namespaces obligatorios por tenant. No se devuelve
 `credential_reference` en schemas públicos y nunca se almacena el secreto en PostgreSQL.
 En producción `EnvironmentCredentialStore` se rechaza. Vault KV v2 fue validado contra un
 servidor real de laboratorio; para producción se exige Vault TLS y autenticación de workload (o

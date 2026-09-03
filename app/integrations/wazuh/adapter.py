@@ -40,7 +40,26 @@ class WazuhAdapter(SecuritySourceAdapter):
         severity = max(0, min(10, round(wazuh_level * 10 / 15)))
         groups = rule.get("groups") or []
         event_type = str(groups[0]) if groups else "wazuh_alert"
-        description = payload.get("full_log") or payload.get("data", {}).get("message")
+        data = payload.get("data")
+        if data is None:
+            data = {}
+        if not isinstance(data, dict):
+            raise AdapterError("Wazuh payload data must be an object")
+        description = payload.get("full_log") or data.get("message")
+        message = str(description or "")
+        action = str(data.get("action") or event_type).lower()
+        outcome = str(data.get("outcome") or data.get("status") or "").lower()
+        if not outcome:
+            if "fail" in event_type.lower() or "failed" in message.lower():
+                outcome = "failure"
+            elif "success" in event_type.lower() or "accepted" in message.lower():
+                outcome = "success"
+        command_line = data.get("command_line") or data.get("command") or payload.get("command")
+        process_name = data.get("process_name") or data.get("process")
+        actor = data.get("user") or data.get("username") or data.get("srcuser")
+        target = data.get("target") or data.get("target_user") or data.get("account")
+        source_ip = data.get("source_ip") or data.get("srcip") or data.get("src_ip")
+        destination_ip = data.get("destination_ip") or data.get("dstip") or data.get("dst_ip")
 
         endpoint = NormalizedEndpoint(
             agent_id=agent_id,
@@ -56,6 +75,19 @@ class WazuhAdapter(SecuritySourceAdapter):
             severity=severity,
             occurred_at=timestamp,
             raw_payload=payload,
+            normalized_data={
+                "category": str(data.get("category") or event_type).lower(),
+                "action": action,
+                "outcome": outcome,
+                "actor": str(actor) if actor is not None else None,
+                "target": str(target) if target is not None else None,
+                "source_ip": str(source_ip) if source_ip is not None else None,
+                "destination_ip": str(destination_ip) if destination_ip is not None else None,
+                "process_name": str(process_name) if process_name is not None else None,
+                "command_line": str(command_line) if command_line is not None else None,
+                "message": message,
+                "attributes": data,
+            },
         )
         alert = NormalizedAlert(
             external_id=alert_id,

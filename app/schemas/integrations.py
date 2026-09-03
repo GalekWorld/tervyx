@@ -7,6 +7,7 @@ from app.core.network import validate_outbound_url
 
 
 class IntegrationCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     integration_type: str = Field(pattern="^wazuh$")
     name: str = Field(min_length=1, max_length=255)
     base_url: str = Field(min_length=8, max_length=2048)

@@ -37,6 +37,8 @@ jobs:
       INTEGRATION_REDIS_URL: redis://localhost:6379/0
       INTEGRATION_VAULT_ADDR: http://localhost:8200
       INTEGRATION_VAULT_TOKEN: vault-ci-token
+      INTEGRATION_OPENBAO_ADDR: http://localhost:58201
+      INTEGRATION_OPENBAO_TOKEN: openbao-ci-token
       JWT_PRIVATE_KEY_PATH: /tmp/soc-ci-jwt/private.pem
       JWT_PUBLIC_KEY_PATH: /tmp/soc-ci-jwt/public.pem
       JWT_ACTIVE_KID: ci-key-1
@@ -44,17 +46,26 @@ jobs:
       RATE_LIMIT_ENABLED: "false"
       ALLOW_PRIVATE_INTEGRATION_URLS: "true"
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.11"
           cache: pip
+      - name: Pin pip for deterministic lock tooling
+        run: python -m pip install --upgrade "pip==25.3"
       - name: Generate ephemeral CI signing key
         run: |
           mkdir -p /tmp/soc-ci-jwt
           openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -out /tmp/soc-ci-jwt/private.pem
           openssl rsa -pubout -in /tmp/soc-ci-jwt/private.pem -out /tmp/soc-ci-jwt/public.pem
-      - run: pip install -r requirements-dev.txt
+      - name: Install hash-locked development dependencies
+        run: pip install --require-hashes -r requirements-dev.lock
+      - name: Verify dependency locks are current
+        run: |
+          pip-compile --quiet --generate-hashes --strip-extras --output-file /tmp/requirements.lock requirements.txt
+          diff --unified=0 requirements.lock /tmp/requirements.lock
+          pip-compile --quiet --generate-hashes --strip-extras --output-file /tmp/requirements-dev.lock requirements-dev.txt
+          diff --unified=0 requirements-dev.lock /tmp/requirements-dev.lock
       - name: Create restricted runtime database role
         run: sh docker/postgres/init-app-user.sh
         env:
@@ -63,8 +74,27 @@ jobs:
           POSTGRES_DB: soc
           POSTGRES_USER: soc_owner
           POSTGRES_APP_PASSWORD: app_password
+      - name: Start OpenBao contract service
+        run: |
+          docker run -d --name openbao-ci -p 127.0.0.1:58201:8200 \
+            ghcr.io/openbao/openbao:2.6.1 server -dev \
+            -dev-root-token-id="$INTEGRATION_OPENBAO_TOKEN" \
+            -dev-listen-address=0.0.0.0:8200
+          for attempt in $(seq 1 30); do
+            : "$attempt"
+            curl --fail --silent \
+              -H "X-Vault-Token: $INTEGRATION_OPENBAO_TOKEN" \
+              http://127.0.0.1:58201/v1/sys/health && exit 0
+            sleep 1
+          done
+          docker logs openbao-ci
+          exit 1
       - run: black --check app tests
       - run: ruff check app tests
+      - name: Validate vulnerability policy
+        run: python scripts/validate_vulnerability_policy.py
+      - name: Validate supply-chain repository controls
+        run: python scripts/validate_supply_chain.py
       - run: mypy app
       - name: Bandit high-confidence/high-severity scan
         run: bandit -r app -lll -iii
@@ -79,17 +109,44 @@ jobs:
       - run: alembic check
         env:
           DATABASE_URL: postgresql+psycopg://soc_owner:owner_password@localhost:5432/soc
-      - run: pytest --cov=app --cov-report=xml --cov-fail-under=80
+      - run: pytest --cov=app --cov-report=xml --junitxml=test-results.xml --cov-fail-under=80
       - name: PostgreSQL backup and restore drill
         run: |
+          set -o pipefail
           container="${{ job.services.postgres.id }}"
-          docker exec -e PGPASSWORD=owner_password "$container" pg_dump -U soc_owner -d soc -Fc -f /tmp/soc.dump
-          docker exec -e PGPASSWORD=owner_password "$container" createdb -U soc_owner soc_restore_ci
-          docker exec -e PGPASSWORD=owner_password "$container" pg_restore -U soc_owner --exit-on-error --no-owner -d soc_restore_ci /tmp/soc.dump
-          docker exec -e PGPASSWORD=owner_password "$container" psql -U soc_owner -d soc_restore_ci -Atc "SELECT version_num FROM alembic_version"
-          docker exec -e PGPASSWORD=owner_password "$container" dropdb -U soc_owner --force soc_restore_ci
-      - run: pip-audit -r requirements.txt
+          {
+            docker exec -e PGPASSWORD=owner_password "$container" pg_dump -U soc_owner -d soc -Fc -f /tmp/soc.dump
+            docker exec -e PGPASSWORD=owner_password "$container" createdb -U soc_owner soc_restore_ci
+            docker exec -e PGPASSWORD=owner_password "$container" pg_restore -U soc_owner --exit-on-error --no-owner -d soc_restore_ci /tmp/soc.dump
+            docker exec -e PGPASSWORD=owner_password "$container" psql -U soc_owner -d soc_restore_ci -Atc "SELECT version_num FROM alembic_version"
+            docker exec -e PGPASSWORD=owner_password "$container" dropdb -U soc_owner --force soc_restore_ci
+          } 2>&1 | tee restore-drill.log
+      - name: Upload PRE-AI gate evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: pre-ai-evidence-${{ github.sha }}
+          path: |
+            test-results.xml
+            coverage.xml
+            restore-drill.log
+          if-no-files-found: warn
+      - name: Audit runtime dependencies against advisories
+        # Strict collection, bounded network timeout and no interactive spinner
+        # make advisory-service failures fail closed instead of silently passing.
+        run: pip-audit --strict --progress-spinner off --timeout 30 -r requirements.lock
       - run: docker build -t autonomous-soc:${{ github.sha }} .
+      - name: Generate SPDX SBOM
+        run: >-
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock
+          anchore/syft@sha256:825cad3a952c87676a6d07e9a3bb05ac9c401d598360070e970aa46d54c1727e
+          autonomous-soc:${{ github.sha }} -o spdx-json > sbom-ci.spdx.json
+      - name: Upload SBOM
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sbom-${{ github.sha }}
+          path: sbom-ci.spdx.json
+          if-no-files-found: error
       - name: Trivy image scan
         run: >-
           docker run --rm
@@ -106,6 +163,7 @@ jobs:
         run: |
           nohup uvicorn app.main:app --host 0.0.0.0 --port 8000 >/tmp/soc-api.log 2>&1 &
           for attempt in $(seq 1 30); do
+            : "$attempt"
             curl --fail --silent http://127.0.0.1:8000/health/ready && exit 0
             sleep 1
           done

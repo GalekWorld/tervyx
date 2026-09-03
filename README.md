@@ -1,6 +1,6 @@
-# Autonomous SOC — Fase 2.6
+# Autonomous SOC — Fase 2.9
 
-Baseline final: [docs/phase-2.6-baseline.md](docs/phase-2.6-baseline.md).
+Baseline de validación: [docs/phase-2.7-baseline.md](docs/phase-2.7-baseline.md).
 
 Backend multi-tenant endurecido para ingestión Wazuh: FastAPI, PostgreSQL con RLS, Redis,
 Celery y Alembic. Esta fase no incluye IA/LLM, frontend ni respuesta automática.
@@ -36,7 +36,7 @@ firmado `org`; `X-Organization-ID` ya no concede contexto ni acceso.
 Wazuh -> WazuhClient -> WazuhAdapter -> IngestionService -> PostgreSQL/RLS
               |                              ^                 |
 Celery Beat -> Redis -> Celery workers ------+                 +-> AuditLog/DLQ
-API -> JWT/RBAC -> tenant context --------------------------------^
+API -> JWT/session/OIDC -> capabilities -> tenant context --------^
               +-> Prometheus metrics / OpenTelemetry / JSON logs
 ```
 
@@ -44,25 +44,30 @@ API -> JWT/RBAC -> tenant context --------------------------------^
 - Worker: fetch, normalización, validación, deduplicación y persistencia fuera del proceso API.
 - Beat: sincronización periódica protegida por lock distribuido Redis.
 - PostgreSQL: unicidad por tenant y RLS como segunda frontera de aislamiento.
-- Secret stores: entorno local, Vault y AWS Secrets Manager mediante un contrato común.
+- Identity: OIDC/PKCE para Entra y proveedores estándar, sesiones revocables y MFA de admins.
+- Secret stores: entorno local, Vault, OpenBao y AWS Secrets Manager mediante un contrato común.
 
-Consulta [arquitectura](docs/architecture.md), [modelo de seguridad](docs/security.md) y
+Consulta [identidad y secretos](docs/identity-secrets-access.md),
+[arquitectura](docs/architecture.md), [modelo de seguridad](docs/security.md),
+[threat model](docs/threat-model.md), [supply chain](docs/supply-chain-security.md) y
 [deployment](docs/deployment.md) para el detalle operativo.
 
-## API y roles
+## API y capabilities
 
-| Método | Ruta | Rol mínimo |
+| Método | Ruta | Capability |
 |---|---|---|
 | `POST` | `/api/v1/auth/token` | público, limitado por tasa |
-| `POST` | `/api/v1/events` | analyst |
-| `GET` | `/api/v1/events`, `/endpoints`, `/alerts`, `/incidents` | viewer |
-| `GET` | rutas de detalle correspondientes | viewer |
-| `POST` | `/api/v1/integrations` | admin |
-| `GET` | `/api/v1/integrations`, `/{id}`, `/{id}/status` | viewer |
-| `POST` | `/api/v1/integrations/{id}/test`, `/{id}/sync` | analyst |
-| `GET` | `/api/v1/dead-letters`, `/{id}` | viewer |
-| `POST` | `/api/v1/dead-letters/{id}/reprocess` | analyst |
-| `POST` | `/api/v1/dead-letters/{id}/discard` | admin |
+| `POST` | `/api/v1/auth/oidc/authorize`, `/callback` | público, limitado por tasa |
+| `POST` | `/api/v1/auth/logout`, `/logout-all` | sesión autenticada |
+| `POST` | `/api/v1/events` | `events.ingest` |
+| `GET` | `/api/v1/events`, `/endpoints`, `/alerts`, `/incidents` | `security.read` |
+| `POST` | `/api/v1/integrations` | `integrations.manage` |
+| `GET` | `/api/v1/integrations`, `/{id}`, `/{id}/status` | `integrations.read` |
+| `POST` | `/api/v1/integrations/{id}/test`, `/{id}/sync` | `integrations.execute` |
+| `POST` | `/api/v1/integrations/{id}/rotate-secret` | `secrets.rotate` |
+| `POST/GET` | `/api/v1/identity-providers` | `identity.manage` |
+| `GET/PUT` | `/api/v1/users/{id}/capabilities...` | `identity.manage` |
+| `POST` | `/api/v1/users/{id}/sessions/revoke` | `sessions.revoke` |
 | `GET` | `/health`, `/health/live`, `/health/ready`, `/metrics` | sistema |
 
 Eventos, alertas, endpoints y DLQ aceptan paginación; `page_size` está limitado a 200.
@@ -102,6 +107,7 @@ pytest lo omite y mantiene los contract tests de auth, paginación, TLS, errores
 .\.venv\Scripts\python.exe -m scripts.benchmark_ingestion
 ```
 
-GitHub Actions repite lint, formato, typing, migración, integración con PostgreSQL/Redis/Vault,
-cobertura mínima del 80 %, restore y build. Semgrep, Bandit, pip-audit, Trivy, Gitleaks y ZAP
-fallan el pipeline ante hallazgos relevantes HIGH/CRITICAL.
+GitHub Actions instala los locks con hashes, verifica su frescura, repite lint, formato, typing,
+migración, integración con PostgreSQL/Redis/Vault, cobertura mínima del 80 %, restore y build.
+Semgrep, Bandit, pip-audit, Trivy, Gitleaks y ZAP fallan el pipeline ante hallazgos relevantes
+HIGH/CRITICAL. Los tags protegidos `v*` publican una imagen firmada keyless y un SBOM SPDX.

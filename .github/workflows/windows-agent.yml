@@ -1,0 +1,56 @@
+name: Windows agent build
+
+on:
+  push:
+    paths: ["agent/windows/**", ".github/workflows/windows-agent.yml"]
+  pull_request:
+    paths: ["agent/windows/**", ".github/workflows/windows-agent.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-dotnet@d4c94342e560b34958eacfc5d055e7a4c0e5c5c7 # v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Restore and publish agent
+        run: dotnet publish agent/windows/Tervyx.Agent.csproj -c Release -r win-x64 --self-contained true -o agent/windows/publish
+      - name: Build MSI
+        shell: pwsh
+        run: |
+          dotnet tool install --global wix --version 5.0.2
+          wix build agent/windows/Installer/Product.wxs -dProductVersion=1.0.${{ github.run_number }} -dPublishDir="$PWD/agent/windows/publish" -o agent/windows/tervyx-agent.msi
+      - name: Silent MSI installation smoke test
+        shell: pwsh
+        run: |
+          $log = Join-Path $PWD 'msi-install.log'
+          $install = Start-Process msiexec.exe -ArgumentList '/i', "$PWD/agent/windows/tervyx-agent.msi", '/qn', '/norestart', '/l*v', $log -Wait -PassThru
+          if ($install.ExitCode -ne 0) { throw "MSI installation failed with exit code $($install.ExitCode)" }
+          if (-not (Get-Service -Name TervyxAgent -ErrorAction SilentlyContinue)) { throw 'TervyxAgent service was not installed' }
+          $uninstall = Start-Process msiexec.exe -ArgumentList '/x', "$PWD/agent/windows/tervyx-agent.msi", '/qn', '/norestart' -Wait -PassThru
+          if ($uninstall.ExitCode -ne 0) { throw "MSI uninstall failed with exit code $($uninstall.ExitCode)" }
+      - name: Require enterprise signing material
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          PFX_B64: ${{ secrets.WINDOWS_CODESIGN_PFX_B64 }}
+          PFX_PASSWORD: ${{ secrets.WINDOWS_CODESIGN_PFX_PASSWORD }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:PFX_B64) -or [string]::IsNullOrWhiteSpace($env:PFX_PASSWORD)) { throw 'Signing secrets are required for release tags' }
+          [IO.File]::WriteAllBytes('signing.pfx', [Convert]::FromBase64String($env:PFX_B64))
+          signtool sign /fd SHA256 /f signing.pfx /p $env:PFX_PASSWORD /tr http://timestamp.digicert.com /td SHA256 agent/windows/tervyx-agent.msi
+          if ((Get-AuthenticodeSignature agent/windows/tervyx-agent.msi).Status -ne 'Valid') { throw 'MSI signature verification failed' }
+          Remove-Item signing.pfx -Force
+      - name: Upload build evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: tervyx-agent-${{ github.sha }}
+          path: |
+            agent/windows/tervyx-agent.msi
+            agent/windows/update-manifest.example.json
+            msi-install.log
+          if-no-files-found: error

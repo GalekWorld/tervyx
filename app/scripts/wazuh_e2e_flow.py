@@ -8,7 +8,7 @@ from sqlalchemy import delete, func, select
 from app.core.auth import create_worker_token, hash_password
 from app.core.database import SessionLocal, set_tenant_context
 from app.models import Alert, Endpoint, IntegrationAccount, Organization, SecurityEvent, User
-from app.workers.tasks import sync_wazuh_agents, sync_wazuh_alerts
+from app.workers.tasks import enqueue_task, sync_wazuh_agents, sync_wazuh_alerts
 
 
 def main() -> None:
@@ -44,8 +44,8 @@ def main() -> None:
         session.commit()
 
     worker_token = create_worker_token(organization_id, account_id)
-    agents_result = sync_wazuh_agents.delay(str(account_id), worker_token).get(timeout=180)
-    alerts_result = sync_wazuh_alerts.delay(str(account_id), worker_token).get(timeout=300)
+    agents_result = enqueue_task(sync_wazuh_agents, str(account_id), worker_token).get(timeout=180)
+    alerts_result = enqueue_task(sync_wazuh_alerts, str(account_id), worker_token).get(timeout=300)
 
     with SessionLocal() as session:
         set_tenant_context(session, organization_id)

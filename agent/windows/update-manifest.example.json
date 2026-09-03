@@ -1,0 +1,9 @@
+{
+  "product": "tervyx-agent",
+  "version": "1.0.0",
+  "package_sha256": "REPLACE_WITH_SHA256",
+  "package_url": "https://updates.example.invalid/tervyx-agent-1.0.0.msi",
+  "signature_file": "tervyx-agent-1.0.0.msi.sig",
+  "signing_key_fingerprint": "REPLACE_WITH_RELEASE_KEY_FINGERPRINT",
+  "minimum_supported_version": "1.0.0"
+}

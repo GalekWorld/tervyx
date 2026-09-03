@@ -16,4 +16,6 @@ opentelemetry-sdk>=1.29,<2.0
 opentelemetry-exporter-otlp-proto-http>=1.29,<2.0
 opentelemetry-instrumentation-fastapi>=0.50b0,<1.0
 opentelemetry-instrumentation-sqlalchemy>=0.50b0,<1.0
+sentry-sdk[fastapi]>=2.0,<3.0
 hvac>=2.3,<3.0
+boto3>=1.40,<2.0

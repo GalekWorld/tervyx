@@ -1,7 +1,9 @@
 param(
-    [ValidateSet(10000, 100000, 1000000)]
+    [ValidateSet(10000, 100000, 500000, 1000000)]
     [int]$Count = 10000,
     [int]$Workers = 2,
+    [int]$BatchSize = 500,
+    [int]$Tenants = 20,
     [int]$TimeoutSeconds = 3600
 )
 
@@ -13,8 +15,11 @@ if (-not $workspace.EndsWith("SOC")) {
 
 Push-Location $workspace
 try {
-    docker compose up -d --scale worker=$Workers db redis jwt-keys migrate worker
-    $workerIds = @(docker compose ps -q worker)
+    # Use the same integration compose topology as the real PostgreSQL/Redis suite;
+    # mixing it with the base project can detach live workers from its network.
+    $compose = @("-f", "docker-compose.yml", "-f", "docker-compose.integration.yml")
+    docker compose @compose up -d --scale worker=$Workers db redis jwt-keys migrate worker
+    $workerIds = @(docker compose @compose ps -q worker)
     if ($workerIds.Count -ne $Workers) {
         throw "Expected $Workers Celery workers, found $($workerIds.Count)"
     }
@@ -26,8 +31,9 @@ try {
         }
     }
     try {
-        docker compose run --rm --no-deps api python -m app.scripts.benchmark_celery `
-            --count $Count --timeout $TimeoutSeconds
+        docker compose @compose run --rm --no-deps api python -m app.scripts.benchmark_celery `
+            --count $Count --batch-size $BatchSize --timeout $TimeoutSeconds `
+            --tenants $Tenants
     }
     finally {
         Stop-Job $statsJob -ErrorAction SilentlyContinue

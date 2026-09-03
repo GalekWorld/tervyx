@@ -3,7 +3,17 @@ import uuid
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
-from app.models import Alert, Endpoint, Incident, Investigation, SecurityEvent
+from app.models import (
+    Alert,
+    AlertGroup,
+    AlertGroupHistory,
+    Endpoint,
+    Incident,
+    IncidentEnrichment,
+    IncidentHistory,
+    Investigation,
+    SecurityEvent,
+)
 
 
 class SecurityRepository:
@@ -90,11 +100,40 @@ class SecurityRepository:
             )
         )
 
+    def list_alert_groups(self) -> list[AlertGroup]:
+        return list(
+            self.session.scalars(
+                select(AlertGroup)
+                .options(selectinload(AlertGroup.alerts))
+                .where(AlertGroup.organization_id == self.organization_id)
+                .order_by(AlertGroup.last_seen.desc())
+            )
+        )
+
+    def get_alert_group(self, entity_id: uuid.UUID) -> AlertGroup | None:
+        return self.session.scalar(
+            select(AlertGroup)
+            .options(selectinload(AlertGroup.alerts))
+            .where(AlertGroup.id == entity_id, AlertGroup.organization_id == self.organization_id)
+        )
+
+    def alert_group_history(self, entity_id: uuid.UUID) -> list[AlertGroupHistory]:
+        return list(
+            self.session.scalars(
+                select(AlertGroupHistory)
+                .where(
+                    AlertGroupHistory.alert_group_id == entity_id,
+                    AlertGroupHistory.organization_id == self.organization_id,
+                )
+                .order_by(AlertGroupHistory.created_at)
+            )
+        )
+
     def list_incidents(self) -> list[Incident]:
         return list(
             self.session.scalars(
                 select(Incident)
-                .options(selectinload(Incident.alerts))
+                .options(selectinload(Incident.alerts), selectinload(Incident.alert_groups))
                 .where(Incident.organization_id == self.organization_id)
                 .order_by(Incident.occurred_at.desc())
             )
@@ -103,10 +142,34 @@ class SecurityRepository:
     def get_incident(self, entity_id: uuid.UUID) -> Incident | None:
         return self.session.scalar(
             select(Incident)
-            .options(selectinload(Incident.alerts))
+            .options(selectinload(Incident.alerts), selectinload(Incident.alert_groups))
             .where(
                 Incident.id == entity_id,
                 Incident.organization_id == self.organization_id,
+            )
+        )
+
+    def incident_history(self, entity_id: uuid.UUID) -> list[IncidentHistory]:
+        return list(
+            self.session.scalars(
+                select(IncidentHistory)
+                .where(
+                    IncidentHistory.incident_id == entity_id,
+                    IncidentHistory.organization_id == self.organization_id,
+                )
+                .order_by(IncidentHistory.created_at)
+            )
+        )
+
+    def incident_enrichments(self, entity_id: uuid.UUID) -> list[IncidentEnrichment]:
+        return list(
+            self.session.scalars(
+                select(IncidentEnrichment)
+                .where(
+                    IncidentEnrichment.incident_id == entity_id,
+                    IncidentEnrichment.organization_id == self.organization_id,
+                )
+                .order_by(IncidentEnrichment.enrichment_type)
             )
         )
 

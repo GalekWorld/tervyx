@@ -1,0 +1,25 @@
+environment = "production"
+
+network = {
+  gateway_public = true, api_private = true, worker_private = true
+  postgres_private = true, redis_private = true, egress_allowlist_only = true
+}
+compute = {
+  api_replicas = 3, worker_replicas = 3, workload_identity = true
+  read_only_filesystem = true, drop_linux_caps = true
+}
+postgres = {
+  private_endpoint = true, tls_verify_full = true, encryption = true
+  backups_enabled = true, pitr_enabled = true
+}
+redis = { private_endpoint = true, tls_enabled = true, encryption = true }
+secrets = {
+  external_backend = true, workload_identity = true, rotation_enabled = true
+  secret_reference_prefix = "secret://tervyx/production/"
+}
+observability = { private_collector = true, audit_export = true, metrics_restricted = true }
+runtime_permissions = {
+  api_permissions = ["secrets.read:runtime", "postgres.connect:app", "redis.connect:runtime"]
+  worker_permissions = ["secrets.read:runtime", "postgres.connect:app", "redis.connect:runtime", "egress.integrations"]
+  migration_permissions = ["postgres.connect:migration"]
+}

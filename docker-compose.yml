@@ -7,6 +7,10 @@ services:
       JWT_PUBLIC_KEY_PATH: /run/jwt/public.pem
     volumes:
       - jwt_keys:/run/jwt
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    pids_limit: 64
+    mem_limit: 128m
     command: ["python", "-m", "app.scripts.generate_jwt_keys"]
     networks: [backend]
 
@@ -37,6 +41,19 @@ services:
       JWT_PRIVATE_KEY_PATH: /run/jwt/private.pem
       JWT_PUBLIC_KEY_PATH: /run/jwt/public.pem
       JWT_ACTIVE_KID: ${JWT_ACTIVE_KID:-local-dev-1}
+      OIDC_TRANSACTION_KEY: ${OIDC_TRANSACTION_KEY:-}
+      CREDENTIAL_STORE_BACKEND: ${CREDENTIAL_STORE_BACKEND:-environment}
+      VAULT_ADDR: ${VAULT_ADDR:-}
+      VAULT_TOKEN: ${VAULT_TOKEN:-}
+      OPENBAO_ADDR: ${OPENBAO_ADDR:-}
+      OPENBAO_TOKEN: ${OPENBAO_TOKEN:-}
+      AWS_REGION: ${AWS_REGION:-eu-west-1}
+      OBJECT_STORAGE_BACKEND: ${OBJECT_STORAGE_BACKEND:-filesystem}
+      OBJECT_STORAGE_BUCKET: ${OBJECT_STORAGE_BUCKET:-tervyx-archive}
+      OBJECT_STORAGE_PREFIX: ${OBJECT_STORAGE_PREFIX:-tervyx}
+      OBJECT_STORAGE_ENDPOINT_URL: ${OBJECT_STORAGE_ENDPOINT_URL:-}
+      OBJECT_STORAGE_REGION: ${OBJECT_STORAGE_REGION:-eu-west-1}
+      OBJECT_STORAGE_LOCAL_PATH: /var/lib/tervyx/archive
     depends_on:
       db:
         condition: service_healthy
@@ -48,15 +65,24 @@ services:
         condition: service_completed_successfully
     volumes:
       - jwt_keys:/run/jwt:ro
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    pids_limit: 256
+    mem_limit: 768m
+    cpus: 1.0
     networks: [backend]
     command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
 
   gateway:
     image: nginx:1.28-alpine
+    user: "101:101"
     read_only: true
     tmpfs:
-      - /var/cache/nginx
-      - /var/run
+      - /var/cache/nginx:rw,noexec,nosuid,uid=101,gid=101,mode=0755,size=16m
+      - /var/run:rw,noexec,nosuid,uid=101,gid=101,mode=0755,size=4m
     volumes:
       - ./docker/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
     ports:
@@ -65,6 +91,11 @@ services:
       api:
         condition: service_started
     networks: [frontend, backend]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    pids_limit: 128
+    mem_limit: 256m
+    cpus: 0.5
 
   migrate:
     build: .
@@ -74,6 +105,13 @@ services:
       db:
         condition: service_healthy
     command: ["alembic", "upgrade", "head"]
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=32m
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    pids_limit: 128
+    mem_limit: 512m
     networks: [backend]
 
   worker:
@@ -85,6 +123,18 @@ services:
       JWT_PRIVATE_KEY_PATH: /run/jwt/private.pem
       JWT_PUBLIC_KEY_PATH: /run/jwt/public.pem
       JWT_ACTIVE_KID: ${JWT_ACTIVE_KID:-local-dev-1}
+      CREDENTIAL_STORE_BACKEND: ${CREDENTIAL_STORE_BACKEND:-environment}
+      VAULT_ADDR: ${VAULT_ADDR:-}
+      VAULT_TOKEN: ${VAULT_TOKEN:-}
+      OPENBAO_ADDR: ${OPENBAO_ADDR:-}
+      OPENBAO_TOKEN: ${OPENBAO_TOKEN:-}
+      AWS_REGION: ${AWS_REGION:-eu-west-1}
+      OBJECT_STORAGE_BACKEND: ${OBJECT_STORAGE_BACKEND:-filesystem}
+      OBJECT_STORAGE_BUCKET: ${OBJECT_STORAGE_BUCKET:-tervyx-archive}
+      OBJECT_STORAGE_PREFIX: ${OBJECT_STORAGE_PREFIX:-tervyx}
+      OBJECT_STORAGE_ENDPOINT_URL: ${OBJECT_STORAGE_ENDPOINT_URL:-}
+      OBJECT_STORAGE_REGION: ${OBJECT_STORAGE_REGION:-eu-west-1}
+      OBJECT_STORAGE_LOCAL_PATH: /var/lib/tervyx/archive
     depends_on:
       db:
         condition: service_healthy
@@ -96,6 +146,15 @@ services:
         condition: service_completed_successfully
     volumes:
       - jwt_keys:/run/jwt:ro
+      - event_archive:/var/lib/tervyx/archive
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=128m
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    pids_limit: 512
+    mem_limit: 1g
+    cpus: 1.5
     networks: [backend, integration_egress]
     command: ["celery", "-A", "app.workers.celery_app:celery_app", "worker", "--loglevel=INFO"]
 
@@ -120,8 +179,16 @@ services:
         condition: service_completed_successfully
     volumes:
       - jwt_keys:/run/jwt:ro
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    pids_limit: 128
+    mem_limit: 256m
+    cpus: 0.5
     networks: [backend]
-    command: ["celery", "-A", "app.workers.celery_app:celery_app", "beat", "--loglevel=INFO"]
+    command: ["celery", "-A", "app.workers.celery_app:celery_app", "beat", "--loglevel=INFO", "--schedule=/tmp/celerybeat-schedule"]
 
   redis:
     image: redis:7-alpine
@@ -134,6 +201,9 @@ services:
       timeout: 3s
       retries: 10
     networks: [backend]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 128
+    mem_limit: 512m
 
   backup:
     image: postgres:16-alpine
@@ -162,12 +232,17 @@ services:
           sleep "$$BACKUP_INTERVAL_SECONDS"
         done
     networks: [backend]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    pids_limit: 128
+    mem_limit: 512m
 
 volumes:
   postgres_data:
   redis_data:
   jwt_keys:
   postgres_backups:
+  event_archive:
 
 networks:
   frontend:

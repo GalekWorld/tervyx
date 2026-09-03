@@ -72,6 +72,18 @@ def test_alert_incident_and_investigation_routes(
         client.get(f"/api/v1/investigations/{investigation.id}", headers=headers()).status_code
         == 200
     )
+    created = client.post(f"/api/v1/incidents/{incident.id}/investigation", headers=headers())
+    assert created.status_code == 201
+    generated_id = created.json()["id"]
+    assert created.json()["incident_id"] == str(incident.id)
+    assert (
+        client.patch(
+            f"/api/v1/investigations/{generated_id}/status",
+            headers=headers(),
+            json={"status": "closed"},
+        ).status_code
+        == 200
+    )
 
 
 def test_post_events(client: TestClient, wazuh_payload: dict) -> None:

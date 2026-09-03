@@ -1,0 +1,9 @@
+# Copy outside the repository and replace every placeholder through the CI
+# identity. This file contains no credentials and must point to a state store
+# dedicated to exactly one environment.
+bucket         = "REPLACE_WITH_ENVIRONMENT_DEDICATED_STATE_STORE"
+key            = "REPLACE_WITH_ENVIRONMENT/tervyx.tfstate"
+region         = "REPLACE_WITH_REGION"
+encrypt        = true
+use_lockfile   = true
+assume_role    = { role_arn = "REPLACE_WITH_NON_HUMAN_DEPLOY_ROLE" }

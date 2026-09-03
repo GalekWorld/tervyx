@@ -70,10 +70,12 @@ def test_malformed_event_is_dead_lettered(session: Session, monkeypatch) -> None
         "app.services.integrations.IntegrationService.client", lambda self, acc: fake_client
     )
     queued = Mock()
-    monkeypatch.setattr(process_security_event, "delay", queued)
+    monkeypatch.setattr("app.workers.tasks.enqueue_task", queued)
     result = sync_wazuh_alerts.run(str(item.id), worker_token)
     assert result["failed_count"] == 1
-    queued.assert_called_once_with(str(item.id), {"password": "must-not-leak"}, worker_token)
+    queued.assert_called_once_with(
+        process_security_event, str(item.id), {"password": "must-not-leak"}, worker_token
+    )
 
 
 def test_event_is_dead_lettered_only_after_retry_exhaustion(session: Session, monkeypatch) -> None:

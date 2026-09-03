@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.core.credentials import CredentialStore
 from app.core.network import validate_outbound_url
 from app.core.security import safe_error
@@ -16,12 +17,21 @@ class IntegrationService:
         self.credential_store = credential_store
 
     def client(self, account: IntegrationAccount) -> WazuhClient:
-        credentials = self.credential_store.get(account.credential_reference)
+        credentials = self.credential_store.get(
+            account.organization_id, account.credential_reference
+        )
         base_url = validate_outbound_url(account.base_url)
         if credentials.get("indexer_url"):
             credentials = dict(credentials)
             credentials["indexer_url"] = validate_outbound_url(str(credentials["indexer_url"]))
-        return WazuhClient(base_url, credentials)
+        settings = get_settings()
+        return WazuhClient(
+            base_url,
+            credentials,
+            timeout=settings.wazuh_request_timeout_seconds,
+            max_retries=settings.wazuh_max_retries,
+            resilience_key=f"{account.organization_id}:{account.id}",
+        )
 
     def checkpoint(self, account: IntegrationAccount, stream: str) -> IntegrationCheckpoint:
         checkpoint = self.session.scalar(
