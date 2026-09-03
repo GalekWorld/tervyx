@@ -43,9 +43,7 @@ def set_tenant_context(session: Session, organization_id: uuid.UUID) -> None:
 
 
 @event.listens_for(Session, "after_begin")
-def _restore_tenant_context(
-    session: Session, transaction, connection
-) -> None:
+def _restore_tenant_context(session: Session, transaction, connection) -> None:
     """Restore transaction-local RLS context on every new DB transaction.
 
     ``set_config(..., true)`` intentionally expires at transaction end.  A
