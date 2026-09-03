@@ -63,8 +63,10 @@ jobs:
       - name: Verify dependency locks are current
         run: |
           pip-compile --quiet --generate-hashes --strip-extras --output-file /tmp/requirements.lock requirements.txt
+          sed -E -i 's#--output-file=[^ ]*/requirements\.lock#--output-file=requirements.lock#' /tmp/requirements.lock
           diff --unified=0 requirements.lock /tmp/requirements.lock
           pip-compile --quiet --generate-hashes --strip-extras --output-file /tmp/requirements-dev.lock requirements-dev.txt
+          sed -E -i 's#--output-file=[^ ]*/requirements-dev\.lock#--output-file=requirements-dev.lock#' /tmp/requirements-dev.lock
           diff --unified=0 requirements-dev.lock /tmp/requirements-dev.lock
       - name: Create restricted runtime database role
         run: sh docker/postgres/init-app-user.sh
