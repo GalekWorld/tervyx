@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 import jwt
+from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicKey
 from cryptography.hazmat.primitives.serialization import load_pem_public_key
 from fastapi import HTTPException, status
 from jwt.algorithms import RSAAlgorithm
@@ -80,6 +81,8 @@ class SigningKeyRing:
         keys = []
         for kid, public_key in self.public_keys.items():
             key_object = load_pem_public_key(public_key.encode("utf-8"))
+            if not isinstance(key_object, RSAPublicKey):
+                raise RuntimeError(f"public key {kid} is not an RSA key")
             jwk = json.loads(RSAAlgorithm.to_jwk(key_object))
             jwk.update({"kid": kid, "use": "sig", "alg": "RS256"})
             keys.append(jwk)
