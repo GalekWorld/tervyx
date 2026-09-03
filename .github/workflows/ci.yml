@@ -141,7 +141,19 @@ jobs:
       - run: alembic upgrade head
         env:
           DATABASE_URL: postgresql+psycopg://soc_owner:owner_password@localhost:5432/soc
-      - run: alembic check
+      - name: Verify migration model is current
+        shell: bash
+        run: |
+          set +e
+          output=$(alembic check 2>&1)
+          status=$?
+          printf '%s\n' "$output"
+          if [ "$status" -ne 0 ]; then
+            while IFS= read -r line; do
+              echo "::error title=alembic check::$line"
+            done <<< "$output"
+            exit "$status"
+          fi
         env:
           DATABASE_URL: postgresql+psycopg://soc_owner:owner_password@localhost:5432/soc
       - run: pytest --cov=app --cov-report=xml --junitxml=test-results.xml --cov-fail-under=80
