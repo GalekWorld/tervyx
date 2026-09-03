@@ -1,10 +1,14 @@
-"""restore direct organization integrity for integration child rows
+"""Compatibility revision for integration foreign-key hardening.
+
+``m_asvs_tenant_integration_fks`` already creates both the composite,
+tenant-scoped foreign keys and the direct ``organization_id`` foreign keys
+for these tables.  This revision is retained in the chain for databases that
+already recorded it, but intentionally performs no DDL.
 
 Revision ID: m_asvs_integration_org_fks
 Revises: m_asvs_tenant_integration_fks
 """
 from collections.abc import Sequence
-from alembic import op
 
 revision: str = "m_asvs_integration_org_fks"
 down_revision: str | None = "m_asvs_tenant_integration_fks"
@@ -13,16 +17,10 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    op.create_foreign_key(
-        "dead_letter_events_organization_id_fkey",
-        "dead_letter_events", "organizations", ["organization_id"], ["id"], ondelete="CASCADE"
-    )
-    op.create_foreign_key(
-        "integration_checkpoints_organization_id_fkey",
-        "integration_checkpoints", "organizations", ["organization_id"], ["id"], ondelete="CASCADE"
-    )
+    # The preceding revision owns these constraints.  Do not recreate them.
+    pass
 
 
 def downgrade() -> None:
-    op.drop_constraint("integration_checkpoints_organization_id_fkey", "integration_checkpoints", type_="foreignkey")
-    op.drop_constraint("dead_letter_events_organization_id_fkey", "dead_letter_events", type_="foreignkey")
+    # Compatibility revision: no DDL was applied by upgrade().
+    pass
