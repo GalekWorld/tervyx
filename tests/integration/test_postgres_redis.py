@@ -195,13 +195,16 @@ def test_postgresql_audit_ledger_is_rls_scoped_and_append_only(integration_url) 
                 {"id": entry.id},
             )
         session.rollback()
-        assert session.scalar(
-            text(
-                "SELECT 1 FROM pg_trigger "
-                "WHERE tgname = 'audit_ledger_no_update' "
-                "AND tgrelid = 'audit_ledger_entries'::regclass"
+        assert (
+            session.scalar(
+                text(
+                    "SELECT 1 FROM pg_trigger "
+                    "WHERE tgname = 'audit_ledger_no_update' "
+                    "AND tgrelid = 'audit_ledger_entries'::regclass"
+                )
             )
-        ) == 1
+            == 1
+        )
 
 
 def test_redis_distributed_lock() -> None:
