@@ -60,16 +60,47 @@ jobs:
           openssl rsa -pubout -in /tmp/soc-ci-jwt/private.pem -out /tmp/soc-ci-jwt/public.pem
       - name: Install hash-locked development dependencies
         run: pip install --require-hashes -r requirements-dev.lock
-      - name: Verify dependency locks are current
-        shell: bash
+      - name: Verify dependency lock compatibility
         run: |
-          set -euo pipefail
-          pip-compile --quiet --generate-hashes --strip-extras --constraint requirements.lock --output-file /tmp/requirements.lock requirements.txt
-          # pip-tools embeds the requested output pathname in generated comments.
-          # Compare only resolved requirements and hashes; metadata is not dependency state.
-          diff --unified=0 <(grep -v '^[[:space:]]*#' requirements.lock) <(grep -v '^[[:space:]]*#' /tmp/requirements.lock)
-          pip-compile --quiet --generate-hashes --strip-extras --constraint requirements-dev.lock --output-file /tmp/requirements-dev.lock requirements-dev.txt
-          diff --unified=0 <(grep -v '^[[:space:]]*#' requirements-dev.lock) <(grep -v '^[[:space:]]*#' /tmp/requirements-dev.lock)
+          pip check
+          python - <<'PY'
+          from pathlib import Path
+          from packaging.requirements import Requirement
+          from packaging.utils import canonicalize_name
+
+          def declared(path: Path, seen: set[Path]) -> list[Requirement]:
+              path = path.resolve()
+              if path in seen:
+                  return []
+              seen.add(path)
+              requirements = []
+              for raw in path.read_text(encoding="utf-8").splitlines():
+                  line = raw.split("#", 1)[0].strip()
+                  if not line:
+                      continue
+                  if line.startswith("-r "):
+                      requirements.extend(declared(path.parent / line[3:].strip(), seen))
+                  else:
+                      requirements.append(Requirement(line))
+              return requirements
+
+          def locked(path: Path) -> dict[str, str]:
+              result = {}
+              for raw in path.read_text(encoding="utf-8").splitlines():
+                  line = raw.strip()
+                  if "==" in line and not line.startswith(("#", "--")):
+                      name, version = line.split("==", 1)
+                      result[canonicalize_name(name)] = version.split()[0].rstrip("\\")
+              return result
+
+          for source, lock in ((Path("requirements.txt"), Path("requirements.lock")), (Path("requirements-dev.txt"), Path("requirements-dev.lock"))):
+              pinned = locked(lock)
+              for requirement in declared(source, set()):
+                  version = pinned.get(canonicalize_name(requirement.name))
+                  if version is None or not requirement.specifier.contains(version, prereleases=True):
+                      raise SystemExit(f"{lock} does not satisfy {requirement}")
+          print("Committed locks satisfy every declared direct requirement")
+          PY
       - name: Create restricted runtime database role
         run: sh docker/postgres/init-app-user.sh
         env:

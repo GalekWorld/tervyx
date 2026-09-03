@@ -27,7 +27,7 @@ jobs:
           $publishDir = (Resolve-Path 'agent/windows/publish').Path
           dotnet tool install --tool-path $toolPath wix --version 5.0.2
           $wix = Join-Path $toolPath 'wix.exe'
-          & $wix build agent/windows/Installer/Product.wxs "-dProductVersion=1.0.${{ github.run_number }}" "-dPublishDir=$publishDir" -arch x64 -o agent/windows/tervyx-agent.msi
+          & $wix build agent/windows/Installer/Product.wxs -d "ProductVersion=1.0.${{ github.run_number }}" -d "PublishDir=$publishDir" -arch x64 -o agent/windows/tervyx-agent.msi
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Silent MSI installation smoke test
         shell: pwsh
