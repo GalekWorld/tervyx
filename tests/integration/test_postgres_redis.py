@@ -9,6 +9,7 @@ from sqlalchemy import create_engine, select, text
 from sqlalchemy.exc import DBAPIError, IntegrityError, ProgrammingError
 from sqlalchemy.orm import Session
 
+from app.core.database import set_tenant_context
 from app.integrations.registry import AdapterRegistry
 from app.integrations.wazuh import WazuhAdapter
 from app.models import (
@@ -161,10 +162,7 @@ def test_postgresql_audit_ledger_is_rls_scoped_and_append_only(integration_url) 
             Organization(id=organization_id, name="Ledger", slug=f"ledger-{organization_id}")
         )
         session.flush()
-        session.execute(
-            text("SELECT set_config('app.current_organization_id', :org, true)"),
-            {"org": str(organization_id)},
-        )
+        set_tenant_context(session, organization_id)
         session.add(
             AuditLog(
                 organization_id=organization_id,
@@ -180,12 +178,30 @@ def test_postgresql_audit_ledger_is_rls_scoped_and_append_only(integration_url) 
         assert AuditLedgerService(session).verify(organization_id).valid
         entry = session.scalar(select(AuditLedgerEntry))
         assert entry is not None
+        other_organization_id = uuid.uuid4()
+        set_tenant_context(session, other_organization_id)
+        assert session.scalar(select(AuditLedgerEntry)) is None
+        set_tenant_context(session, organization_id)
         with pytest.raises(DBAPIError):
             session.execute(
                 text("UPDATE audit_ledger_entries SET entry_hash = '0' WHERE id = :id"),
                 {"id": entry.id},
             )
         session.rollback()
+        set_tenant_context(session, organization_id)
+        with pytest.raises(DBAPIError):
+            session.execute(
+                text("DELETE FROM audit_ledger_entries WHERE id = :id"),
+                {"id": entry.id},
+            )
+        session.rollback()
+        assert session.scalar(
+            text(
+                "SELECT 1 FROM pg_trigger "
+                "WHERE tgname = 'audit_ledger_no_update' "
+                "AND tgrelid = 'audit_ledger_entries'::regclass"
+            )
+        ) == 1
 
 
 def test_redis_distributed_lock() -> None:
