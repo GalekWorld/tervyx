@@ -29,15 +29,36 @@ jobs:
           $wix = Join-Path $toolPath 'wix.exe'
           & $wix build agent/windows/Installer/Product.wxs -d "ProductVersion=1.0.${{ github.run_number }}" -d "PublishDir=$publishDir" -arch x64 -o agent/windows/tervyx-agent.msi
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Locate generated MSI artifact
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $msiDirectory = Join-Path (Get-Location) 'agent/windows'
+          $generated = @(Get-ChildItem -LiteralPath $msiDirectory -Filter '*.msi' -File -ErrorAction SilentlyContinue)
+          Write-Host "MSI files under $msiDirectory"
+          $generated | ForEach-Object { Write-Host (" - " + $_.FullName + " (" + $_.Length + " bytes)") }
+          $expected = Join-Path $msiDirectory 'tervyx-agent.msi'
+          if (-not (Test-Path -LiteralPath $expected -PathType Leaf)) {
+            throw "Expected MSI was not generated: $expected"
+          }
+          $msiPath = (Resolve-Path -LiteralPath $expected).Path
+          if ([IO.Path]::GetExtension($msiPath) -ne '.msi') {
+            throw "Resolved artifact is not an MSI: $msiPath"
+          }
+          "MSI_PATH=$msiPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "Resolved MSI: $msiPath"
       - name: Silent MSI installation smoke test
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $log = Join-Path $PWD 'msi-install.log'
-          $install = Start-Process msiexec.exe -ArgumentList '/i', "$PWD/agent/windows/tervyx-agent.msi", '/qn', '/norestart', '/l*v', $log -Wait -PassThru
+          if ([string]::IsNullOrWhiteSpace($env:MSI_PATH) -or -not (Test-Path -LiteralPath $env:MSI_PATH -PathType Leaf)) { throw "MSI_PATH does not identify an existing file: $env:MSI_PATH" }
+          $msiPath = (Resolve-Path -LiteralPath $env:MSI_PATH).Path
+          $log = Join-Path (Get-Location) 'msi-install.log'
+          $installer = Join-Path $env:WINDIR 'System32/msiexec.exe'
+          $install = Start-Process -FilePath $installer -ArgumentList @('/i', "`"$msiPath`"", '/qn', '/norestart', '/l*v', "`"$log`"") -Wait -PassThru
           if ($install.ExitCode -ne 0) { throw "MSI installation failed with exit code $($install.ExitCode)" }
           if (-not (Get-Service -Name TervyxAgent -ErrorAction SilentlyContinue)) { throw 'TervyxAgent service was not installed' }
-          $uninstall = Start-Process msiexec.exe -ArgumentList '/x', "$PWD/agent/windows/tervyx-agent.msi", '/qn', '/norestart' -Wait -PassThru
+          $uninstall = Start-Process -FilePath $installer -ArgumentList @('/x', "`"$msiPath`"", '/qn', '/norestart') -Wait -PassThru
           if ($uninstall.ExitCode -ne 0) { throw "MSI uninstall failed with exit code $($uninstall.ExitCode)" }
       - name: Require enterprise signing material
         if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
