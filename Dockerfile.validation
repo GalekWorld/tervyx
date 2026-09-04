@@ -10,7 +10,7 @@ RUN apk upgrade --no-cache \
     && addgroup -S soc \
     && adduser -S -G soc soc
 
-COPY requirements-validation.lock ./
+COPY requirements.lock requirements-validation.lock ./
 RUN pip install --no-cache-dir --require-hashes -r requirements-validation.lock \
     && pip check \
     && pip uninstall --yes setuptools wheel
