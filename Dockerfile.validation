@@ -1,0 +1,25 @@
+# Validation-only image. This file is never used by the production image.
+FROM python:3.11-alpine3.22@sha256:a4fc589b32e824f3f02ed9d7e7be19518aa47e105b80416336af9f202275a489
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+WORKDIR /app
+
+RUN apk upgrade --no-cache \
+    && addgroup -S soc \
+    && adduser -S -G soc soc
+
+COPY requirements-validation.lock ./
+RUN pip install --no-cache-dir --require-hashes -r requirements-validation.lock \
+    && pip check \
+    && pip uninstall --yes setuptools wheel
+
+COPY app ./app
+COPY alembic ./alembic
+COPY tests ./tests
+COPY alembic.ini pyproject.toml ./
+RUN chown -R soc:soc /app
+USER soc
+
+CMD ["python", "-m", "pytest", "tests/integration/test_postgres_redis.py", "-q"]

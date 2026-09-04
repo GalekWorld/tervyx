@@ -1,0 +1,24 @@
+# Keep the validation context small while intentionally retaining tests/.
+.git
+.venv
+.semgrep-venv
+.tools
+__pycache__
+*.py[cod]
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.coverage
+coverage.xml
+htmlcov
+*.db
+.env
+.wazuh-e2e
+autonomous-soc-*.tar
+benchmark-results
+backups
+agent
+infra
+docs
+docker
+scripts
